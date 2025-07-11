@@ -1,11 +1,13 @@
 import re
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 import sys
 import os
+from datetime import datetime, timezone
 sys.path.append(os.path.join(os.path.dirname(__file__), 'AI_service'))
 from AI_service.generate_contract import generate_contract as ai_generate_contract
 from deployment_service import deployment_service
+from utils.mongo import get_chat_collection
 
 router = APIRouter()
 
@@ -75,3 +77,40 @@ async def deploy_contract(req: DeployRequest):
             deployment_service.cleanup_contract_file(contract_name)
         except:
             pass  # Ignore cleanup errors 
+
+@router.post("/save_chat_history")
+async def save_chat_history(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id")
+    chat_history = data.get("chat_history")  # Should be a list of messages or similar
+
+    if not user_id or not chat_history:
+        return {"success": False, "error": "user_id and chat_history are required"}
+
+    for msg in chat_history:
+        if "timestamp" not in msg:
+            msg["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    collection = get_chat_collection()
+    result = collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"chat_history": chat_history}},
+        upsert=True
+    )
+    collection = get_chat_collection()
+    # Upsert: update if exists, insert if not
+    result = collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"chat_history": chat_history}},
+        upsert=True
+    )
+    return {"success": True, "matched_count": result.matched_count, "modified_count": result.modified_count}
+
+@router.get("/get_chat_history/{user_id}")
+async def get_chat_history(user_id: str):
+    collection = get_chat_collection()
+    doc = collection.find_one({"user_id": user_id})
+    if doc:
+        return {"success": True, "chat_history": doc.get("chat_history", [])}
+    else:
+        return {"success": False, "error": "No chat history found"} 
