@@ -1,0 +1,22 @@
+{
+  "extends": "solhint:recommended",
+  "rules": {
+    "avoid-sha3": "warn",
+    "compiler-version": ["error", "^0.8.0"],
+    "func-visibility": ["warn", {"ignoreConstructors": true}],
+    "max-line-length": ["error", 120],
+    "not-rely-on-time": "warn",
+    "no-empty-blocks": "warn",
+    "no-inline-assembly": "warn",
+    "no-low-level-calls": "warn",
+    "no-unused-vars": "warn",
+    "quotes": ["error", "double"],
+    "reason-string": ["warn", {"maxLength": 50}],
+    "reentrancy": "warn",
+    "security/no-block-members": "warn",
+    "security/no-inline-assembly": "warn",
+    "security/no-low-level-calls": "warn",
+    "security/no-unchecked-call-value": "warn",
+    "security/valid-external-function": "warn"
+  }
+} 

@@ -2,19 +2,19 @@
 const hre = require("hardhat");
 
 async function main() {
-    const Governance = await hre.ethers.getContractFactory("Governance");
-    const contract = await Governance.deploy();
+    const TestToken = await hre.ethers.getContractFactory("TestToken");
+    const contract = await TestToken.deploy();
     await contract.waitForDeployment();
     
     const address = await contract.getAddress();
-    console.log("Governance deployed to:", address);
+    console.log("TestToken deployed to:", address);
     
     // Return deployment info as JSON
     console.log(JSON.stringify({
         success: true,
         contractAddress: address,
         network: "primordial",
-        contractName: "Governance"
+        contractName: "TestToken"
     }));
 }
 

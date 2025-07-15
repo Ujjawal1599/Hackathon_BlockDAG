@@ -9,6 +9,8 @@ from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 import re
 
+from AI_service.llm_autofix import llm_autofix_solidity
+
 class ContractDeploymentService:
     def __init__(self):
         self.hardhat_dir = Path(__file__).parent.parent / "contracts" / "hardhat"
@@ -146,25 +148,44 @@ class ContractDeploymentService:
     def deploy_contract(self, contract_code: str, contract_name: str = "GeneratedContract") -> Dict[str, Any]:
         """Deploy the contract to BlockDAG testnet"""
         original_dir = os.getcwd()  # Initialize at the beginning
+        constructor_args = get_default_constructor_args(contract_code)
+        print(f"Constructor args: {constructor_args}")
         try:
             # Save contract to file
             contract_file = self.save_contract_to_file(contract_code, contract_name)
             
             # Compile the contract using the same contract_name
             compile_result = self.compile_contract(contract_name)
+            # If compilation failed, try to autofix with LLM and recompile
             if not compile_result["success"]:
-                return compile_result
+                # Attempt to autofix using LLM
+                fixed_code = llm_autofix_solidity(contract_code, compile_result.get("error", ""))
+                if fixed_code and fixed_code != contract_code:
+                    # Save the fixed contract to file
+                    contract_file = self.save_contract_to_file(fixed_code, contract_name)
+                    # Try to recompile with the fixed code
+                    compile_result = self.compile_contract(contract_name)
+                    if not compile_result["success"]:
+                        return compile_result["error"]
+                    contract_code = fixed_code  # Use the fixed code for deployment
+                
             
             # Change to Hardhat directory
             os.chdir(self.hardhat_dir)
             
             # Create deployment script
+            if constructor_args and len(constructor_args) > 0:
+                args_str = ", ".join(repr(arg) for arg in constructor_args)
+                deploy_call = f"const contract = await {contract_name}.deploy({args_str});"
+            else:
+                deploy_call = f"const contract = await {contract_name}.deploy();"
+            
             deploy_script = f"""
 const hre = require("hardhat");
 
 async function main() {{
     const {contract_name} = await hre.ethers.getContractFactory("{contract_name}");
-    const contract = await {contract_name}.deploy();
+    {deploy_call}
     await contract.waitForDeployment();
     
     const address = await contract.getAddress();
@@ -196,14 +217,13 @@ main()
             with open(script_file, 'w') as f:
                 f.write(deploy_script)
             
-            # Run deployment
             result = subprocess.run(
                 [str(self.npx_path), "hardhat", "run", "scripts/deploy_generated.js", "--network", "primordial"],
                 capture_output=True,
                 text=True,
                 timeout=120
             )
-            
+            print(f"Deployment result: {result.stdout}")
             # Parse the JSON output from the script
             try:
                 # Find the JSON output in the stdout
@@ -261,6 +281,47 @@ main()
 def extract_contract_name(contract_code: str) -> str:
     match = re.search(r'contract\s+(\w+)', contract_code)
     return match.group(1) if match else "GeneratedContract"
+
+def get_default_constructor_args(contract_code: str):
+    """
+    Extracts constructor parameters from Solidity code and returns default values.
+    """
+    # Find the constructor definition
+    match = re.search(r'constructor\s*\(([^)]*)\)', contract_code)
+    if not match:
+        return []  # No constructor or default constructor
+
+    params = match.group(1).strip()
+    if not params:
+        return []
+
+    args = []
+    # Split parameters by comma, handle multiple spaces
+    for param in params.split(','):
+        param = param.strip()
+        if not param:
+            continue
+        # Extract type and name
+        parts = param.split()
+        if len(parts) < 2:
+            continue
+        param_type = parts[0]
+        # Assign default values based on type
+        if 'uint' in param_type or 'int' in param_type:
+            args.append(0)
+        elif 'string' in param_type:
+            args.append("default")
+        elif 'address' in param_type or 'IERC20' in param_type:
+            args.append("0x0000000000000000000000000000000000000000")
+        elif 'bool' in param_type:
+            args.append(False)
+        elif param_type.endswith('[]'):
+            args.append([])
+        else:
+            # For unknown types, use a safe default instead of None
+            args.append("0x0000000000000000000000000000000000000000")
+
+    return args
 
 # Create a global instance
 deployment_service = ContractDeploymentService() 

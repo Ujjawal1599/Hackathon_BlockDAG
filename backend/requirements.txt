@@ -2,6 +2,8 @@ fastapi
 uvicorn
 openai
 langchain
+pymongo
 python-dotenv
 langchain-community
 langchain_openai
+langchain-core

@@ -1,13 +1,37 @@
 'use client'
 import React, { useState, useEffect, useRef } from "react";
 import MonacoEditor from "@monaco-editor/react";
-import { CodeResponse, sendChat } from "@/services/chatService";
-import { deploySmartContract, IDeployResponse } from "@/services/deployService";
+import { CodeResponse, saveChat, sendChat } from "@/services/chatService";
+import { deploySmartContract, IDeployResponse, saveDeployment, getDeployments } from "@/services/deployService";
 import toast, { Toaster } from 'react-hot-toast';
+import { useAccount } from "wagmi";
+import { getChat } from "@/services/chatService";
+import { FaHistory } from "react-icons/fa";
+import DeploymentHistoryTable from "./DeploymentHistoryTable";
+import { Button } from "./ui/button";
+import { useTheme } from "@/context/ThemeContext";
+import { Input } from "./ui/input";
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogClose,
+} from "./ui/dialog";
 
 interface Message {
     sender: "user" | "ai";
     text: string;
+    code?: string
+}
+
+interface Deployment {
+    contractName?: string;
+    contractAddress?: string;
+    network?: string;
+    timestamp?: string;
+    explorerUrl?: string;
+    [key: string]: any;
 }
 
 const initialCode = `// SPDX-License-Identifier: MIT
@@ -29,6 +53,10 @@ const ChatWithEditor = () => {
     const [isLoading, setIsLoading] = useState(false)
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [deployInfo, setDeployInfo] = useState<IDeployResponse | null>(null);
+    const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+    const [deployments, setDeployments] = useState<Deployment[]>([]);
+    const { address } = useAccount();
+    const { theme } = useTheme();
 
     const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -39,21 +67,57 @@ const ChatWithEditor = () => {
         }
     }, [messages]);
 
+    useEffect(() => {
+        const fetchChat = async () => {
+            if (!address) return;
+            try {
+                const res = await getChat(address);
+                if (res && res.data && res.data.chat_history) {
+                    // Convert chat_history to Message[]
+                    const loadedMessages = res.data.chat_history.map((msg: any) => ({
+                        sender: msg.sender,
+                        text: msg.message || msg.text || "",
+                        code: msg.code
+                    }));
+                    setMessages(loadedMessages);
+                    // Find last AI message with code
+                    const lastAiMsg = [...loadedMessages].reverse().find(m => m.sender === 'ai' && m.code);
+                    if (lastAiMsg && lastAiMsg.code) {
+                        setCode(lastAiMsg.code);
+                    }
+                }
+            } catch (e) {
+                console.log(e);
+            }
+        };
+        fetchChat();
+    }, [address]);
+
 
     const handleSend = async () => {
+        if (!address) {
+            toast.error("Wallet not connected");
+            return;
+        }
         try {
-            console.log("sending message")
+            const chatPayload: Message[] = []
             setIsLoading(true)
             if (!input.trim()) return;
-            setMessages([...messages, { sender: "user", text: input }]);
+            let userMessage: Message = { sender: "user", text: input }
+            setMessages([...messages, userMessage]);
+            chatPayload.push(userMessage)
 
             let prompt = input
             setInput("");
             let aiResponse: CodeResponse | undefined = await sendChat(prompt)
             if (!aiResponse) return
 
-            setMessages(prev => [...prev, { sender: 'ai', text: aiResponse.text }])
+            let aiMessage: Message = { sender: 'ai', text: aiResponse.text, code: aiResponse.code }
+            setMessages(prev => [...prev, aiMessage])
             setCode(aiResponse.code)
+            chatPayload.push(aiMessage)
+
+            await saveChat(address, chatPayload)
 
         } catch (e: any) {
             console.log(e)
@@ -63,11 +127,15 @@ const ChatWithEditor = () => {
     };
 
     const handleDeploy = async () => {
+        if (!address) {
+            toast.error("Wallet not connected");
+            return;
+        }
         toast.loading('Deployment started...', { id: 'deploy' });
         setIsLoading(true);
         try {
             let deployResponse: IDeployResponse = await deploySmartContract(code)
-            console.log(deployResponse)
+            await saveDeployment(deployResponse, address)
             setDeployInfo(deployResponse);
             setIsModalOpen(true);
             toast.dismiss('deploy');
@@ -80,20 +148,32 @@ const ChatWithEditor = () => {
         }
     };
 
+    const handleOpenHistory = async () => {
+        if (!address) {
+            toast.error("Wallet not connected");
+            return;
+        }
+        try {
+            const deployments: IDeployResponse[] = await getDeployments(address);
+            setDeployments(deployments);
+            setIsHistoryModalOpen(true);
+        } catch (e) {
+            toast.error("Failed to fetch deployment history");
+            setDeployments([]);
+            setIsHistoryModalOpen(true);
+        }
+    };
+
     return (
         <>
             <Toaster position="top-center" />
             {/* Modal for deployment info */}
             {isModalOpen && deployInfo && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-                    <div className="bg-gray-900 text-white rounded-lg shadow-lg p-8 max-w-lg w-full relative">
-                        <button
-                            className="absolute top-2 right-2 text-gray-400 hover:text-white text-2xl"
-                            onClick={() => setIsModalOpen(false)}
-                        >
-                            &times;
-                        </button>
-                        <h2 className="text-2xl font-bold mb-4">Deployment Successful 🎉</h2>
+                <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+                    <DialogContent className="max-w-lg w-full">
+                        <DialogHeader>
+                            <DialogTitle>Deployment Successful 🎉</DialogTitle>
+                        </DialogHeader>
                         <div className="space-y-2">
                             {deployInfo.contractAddress && (
                                 <div><span className="font-semibold">Contract Address:</span> <span className="break-all">{deployInfo.contractAddress}</span></div>
@@ -113,12 +193,18 @@ const ChatWithEditor = () => {
                                 <div><span className="font-semibold">Transaction Hash:</span> {(deployInfo as any).transactionHash}</div>
                             )}
                         </div>
-                    </div>
-                </div>
+                    </DialogContent>
+                </Dialog>
             )}
-            <div className="flex flex-col md:flex-row w-full h-[80vh] bg-gray-900 rounded-lg shadow-lg overflow-hidden">
+            {/* Modal for deployment history */}
+            <DeploymentHistoryTable
+                deployments={deployments}
+                open={isHistoryModalOpen}
+                onOpenChange={setIsHistoryModalOpen}
+            />
+            <div className="flex flex-col md:flex-row w-full h-[80vh] rounded-lg shadow-lg overflow-hidden bg-neutral-200 text-black dark:bg-neutral-800 dark:text-white">
                 {/* Chat Section */}
-                <div className="flex flex-col w-full md:w-1/2 h-full p-4 border-r border-gray-800">
+                <div className="flex flex-col w-full md:w-1/2 h-full p-4 border-r border-neutral-400 dark:border-neutral-900">
                     <div className="flex-1 overflow-y-auto mb-4 space-y-2">
                         {messages.map((msg, idx) => (
                             <div
@@ -126,7 +212,12 @@ const ChatWithEditor = () => {
                                 className={`p-2 flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
                             >
                                 <div
-                                    className={`p-2 rounded-lg max-w-[80%] ${msg.sender === "user" ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-100"}`}
+                                    className={`p-2 rounded-lg max-w-[80%] 
+                                    ${msg.sender === "user"
+                                        ? (theme === 'dark' ? 'bg-blue-600 text-white' : 'bg-blue-400 text-black')
+                                        : (theme === 'dark' ? 'bg-gray-700 text-gray-100' : 'bg-gray-300 text-black')
+                                    }
+                                `}
                                 >
                                     {msg.text}
                                 </div>
@@ -135,27 +226,35 @@ const ChatWithEditor = () => {
                         <div ref={chatEndRef} />
                     </div>
                     <div className="flex gap-2">
-                        <input
-                            className="flex-1 p-2 rounded bg-gray-800 text-white border border-gray-700 focus:outline-none"
+                        <Input
+                            className={`flex-1 p-2 rounded border focus:outline-none
+                                ${theme === 'dark'
+                                    ? 'bg-gray-800 text-white border-gray-700 placeholder-gray-400'
+                                    : 'bg-white text-black border-gray-300 placeholder-gray-500'}
+                            `}
                             value={input}
                             onChange={e => setInput(e.target.value)}
                             placeholder="e.g. ERC-20|burnable, mintable, capped at 1M tokens"
                             onKeyDown={e => e.key === 'Enter' && handleSend()}
                         />
-                        <button
-                            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 flex items-center justify-center min-w-[64px]"
+                        <Button
+                            className={`px-4 py-2 rounded flex items-center justify-center min-w-[64px] 
+                                ${theme === 'dark'
+                                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                    : 'bg-blue-400 text-black hover:bg-blue-500'}
+                            `}
                             onClick={handleSend}
                             disabled={isLoading}
                         >
                             {isLoading ? (
-                                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
                                 </svg>
                             ) : (
                                 'Send'
                             )}
-                        </button>
+                        </Button>
                     </div>
                 </div>
                 {/* Code Editor Section */}
@@ -166,15 +265,15 @@ const ChatWithEditor = () => {
                             defaultLanguage="solidity"
                             value={code}
                             onChange={(value: any) => setCode(value || "")}
-                            theme="vs-dark"
+                            theme={theme === 'dark' ? 'vs-dark' : 'light'}
                             options={{ fontSize: 14, minimap: { enabled: false } }}
                         />
                     </div>
-                    <div className="p-4 border-t border-gray-800 flex justify-end gap-2">
-                        <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                    <div className="p-4 flex justify-end gap-2">
+                        <Button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
                             Compile
-                        </button>
-                        <button onClick={handleDeploy} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 flex items-center justify-center min-w-[64px]" disabled={isLoading}>
+                        </Button>
+                        <Button onClick={handleDeploy} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 flex items-center justify-center min-w-[64px]" disabled={isLoading}>
                             {isLoading ? (
                                 <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -183,7 +282,16 @@ const ChatWithEditor = () => {
                             ) : (
                                 'Deploy'
                             )}
-                        </button>
+                        </Button>
+                        <Button
+                            onClick={handleOpenHistory}
+                            className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-600 flex items-center justify-center"
+                            title="View Deployment History"
+                        >
+                            History
+                            {/* <FaHistory className="mr-2" /> */}
+                            {/* <span className="hidden md:inline">History</span> */}
+                        </Button>
                     </div>
                 </div>
             </div>

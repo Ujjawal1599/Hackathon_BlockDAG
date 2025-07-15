@@ -50,3 +50,26 @@ function separateTextAndCode(aiResponse: string): CodeResponse {
   
     return { text, code };
   }
+
+
+  // --- New methods for chat history ---
+
+export async function saveChat(user_id: string, chat_history: any[]) {
+  try {
+      let payload = {
+          user_id: user_id,
+          chat_history: chat_history
+      };
+      await api.post('/save_chat_history', payload);
+  } catch (e: any) {
+      console.log(e);
+  }
+}
+
+export async function getChat(user_id: string) {
+  try {
+      return await api.get(`/get_chat_history/${user_id}`);
+  } catch (e: any) {
+      console.log(e);
+  }
+}

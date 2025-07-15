@@ -1,19 +1,19 @@
 import re
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 import sys
 import os
+from datetime import datetime, timezone
 sys.path.append(os.path.join(os.path.dirname(__file__), 'AI_service'))
 from AI_service.generate_contract import generate_contract as ai_generate_contract
 from deployment_service import deployment_service
+from utils.mongo import get_chat_collection
+from utils.mongo import get_deployment_collection
 
 router = APIRouter()
 
 class GenerateRequest(BaseModel):
     prompt: str
-
-class AuditRequest(BaseModel):
-    code: str
 
 class DeployRequest(BaseModel):
     code: str
@@ -32,11 +32,6 @@ async def generate_contract(req: GenerateRequest):
     contract_type, features = map(str.strip, req.prompt.split('|', 1))
     contract = ai_generate_contract(contract_type, features)
     return {"contract": contract}
-
-@router.post("/audit")
-async def audit_contract(req: AuditRequest):
-    # Placeholder: Return dummy audit result
-    return {"audit": f"Audit result for provided code: OK (placeholder)"}
 
 @router.post("/deploy")
 async def deploy_contract(req: DeployRequest):
@@ -75,3 +70,97 @@ async def deploy_contract(req: DeployRequest):
             deployment_service.cleanup_contract_file(contract_name)
         except:
             pass  # Ignore cleanup errors 
+
+@router.post("/save_chat_history")
+async def save_chat_history(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id")
+    chat_history = data.get("chat_history")  # Should be a list of messages or similar
+
+    if not user_id or not chat_history:
+        return {"success": False, "error": "user_id and chat_history are required"}
+
+    for msg in chat_history:
+        if "timestamp" not in msg:
+            msg["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    collection = get_chat_collection()
+    existing = collection.find_one({"user_id": user_id})
+
+    if existing:
+        # Append to existing chat_history
+        result = collection.update_one(
+            {"user_id": user_id},
+            {"$push": {"chat_history": {"$each": chat_history}}}
+        )
+        return {
+            "success": True,
+            "action": "appended",
+            "matched_count": result.matched_count,
+            "modified_count": result.modified_count
+        }
+    else:
+        # Create new document
+        result = collection.insert_one(
+            {"user_id": user_id, "chat_history": chat_history}
+        )
+        return {
+            "success": True,
+            "action": "created",
+            "inserted_id": str(result.inserted_id)
+        }
+
+@router.post("/save_deployment")
+async def save_deployment(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id")
+    deployment = data.get("deployment")  # Should be a dict with deployment info
+
+    if not user_id or not deployment:
+        return {"success": False, "error": "user_id and deployment are required"}
+
+    deployment["timestamp"] = deployment.get("timestamp") or datetime.now(timezone.utc).isoformat()
+
+    collection = get_deployment_collection()
+    existing = collection.find_one({"user_id": user_id})
+
+    if existing:
+        # Append to existing deployments array
+        result = collection.update_one(
+            {"user_id": user_id},
+            {"$push": {"deployments": deployment}}
+        )
+        return {
+            "success": True,
+            "action": "appended",
+            "matched_count": result.matched_count,
+            "modified_count": result.modified_count
+        }
+    else:
+        # Create new document
+        result = collection.insert_one(
+            {"user_id": user_id, "deployments": [deployment]}
+        )
+        return {
+            "success": True,
+            "action": "created",
+            "inserted_id": str(result.inserted_id)
+        }
+
+@router.get("/get_chat_history/{user_id}")
+async def get_chat_history(user_id: str):
+    collection = get_chat_collection()
+    doc = collection.find_one({"user_id": user_id})
+    if doc:
+        return {"success": True, "chat_history": doc.get("chat_history", [])}
+    else:
+        return {"success": False, "error": "No chat history found"} 
+
+@router.get("/get_deployments/{user_id}")
+async def get_deployments(user_id: str):
+    collection = get_deployment_collection()
+    doc = collection.find_one({"user_id": user_id})
+    if doc and "deployments" in doc:
+        return {"success": True, "deployments": doc["deployments"]}
+    else:
+        return {"success": True, "deployments": []} 

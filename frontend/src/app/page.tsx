@@ -27,7 +27,8 @@ import { Step2 } from "@/components/step2";
         </p>
         <div className="flex gap-4">
           <Button variant="default" onClick={gotochatpage}>Try the Demo</Button>
-          <Button variant="outline">View on GitHub</Button>
+          <Button variant="outline" onClick={() => router.push('/audit')}>Contract Auditor</Button>
+          <Button variant="outline" onClick={() => window.open('https://github.com/Ujjawal1599/Hackathon_BlockDAG', '_blank')}>View on GitHub</Button>
         </div>
       </header>
 
