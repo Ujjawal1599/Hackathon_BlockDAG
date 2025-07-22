@@ -25,6 +25,11 @@ The purpose of MetaDAG Chatbot is to democratize and accelerate smart contract d
 
 ---
 
+## App Architecture
+![WhatsApp Image 2025-07-22 at 7 04 41 PM](https://github.com/user-attachments/assets/9d948cf0-7621-4e73-a445-939d22d9c25e)
+
+---
+
 ## Project Structure
 
 ```
